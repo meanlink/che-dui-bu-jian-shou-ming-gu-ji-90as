@@ -8,3 +8,14 @@ class JobStatus(str, Enum):
     running = 'running'
     completed = 'completed'
     failed = 'failed'
+class PartKind(str, Enum):
+    machine = 'machine'
+    assembly = 'assembly'
+    component = 'component'
+class RecallStatus(str, Enum):
+    tracing = 'tracing'
+    open = 'open'
+    closed = 'closed'
+class IsolationStatus(str, Enum):
+    isolated = 'isolated'
+    released = 'released'

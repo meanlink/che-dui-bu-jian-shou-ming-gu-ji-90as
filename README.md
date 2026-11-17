@@ -5,6 +5,7 @@
 ## 模块与业务流程
 数据接入（JSON/CSV、字段验证、批次指纹）→ 参数化分析（异步 Python worker）→ 结果复核（指标、图形、明细、解释、批准）→ 定时分发（本地收件箱、CSV/JSON、SHA256）；另有业务总览和审计轨迹。
 三个贯穿全栈的实体：Dataset 数据批次、Job 分析任务、Report 分发计划；辅助 User、Audit、Delivery。
+装配谱系与召回模块贯穿其中：Part 总成节点、Install 装卸关系、Recall 召回事件、IsolationEntry 隔离名单、IdempotencyKey 幂等凭据。
 
 ## 快速启动
 ```bash
@@ -18,18 +19,31 @@ docker compose exec -T backend python -m scripts.seed_demo
 ## 演示账号与权限
 |账号|密码|真实权限|
 |---|---|---|
-|admin@demo.local|Demo123!|接入、执行、批准、分发、暂停、读取与下载|
-|analyst@demo.local|Demo123!|接入、执行、读取与下载；不能批准或安排分发|
+|admin@demo.local|Demo123!|接入、执行、批准、分发、暂停、召回冻结/结案、隔离解除、读取与下载|
+|analyst@demo.local|Demo123!|接入、执行、登记装卸、发起召回、追溯、读取与下载；不能冻结边界、解除隔离或结案|
 |viewer@demo.local|Demo123!|只读与下载|
+
+## 装配谱系与召回隔离
+页面 `#/lineage` 登记装卸与发起召回，`#/recalls` 处置隔离并结案。
+
+- 装卸关系只追加：拆下写 `removed_at`，旧关系保留；同一部件同一时刻只允许一处安装（区间重叠即 409，且数据库对「仍在装」加部分唯一索引）；装配形成环或以总成为下级会被拒绝。
+- 同一写操作要求 `Idempotency-Key` 请求头：同号同内容返回首次响应，同号换内容 409；中断后重试不重复登记，追溯按 `segment` 唯一键续写。
+- 召回从故障起点 `started_at` 出发，沿「安装区间与起点后时段重叠」的装配路径逐级追到整机；已拆下的关系同样列入结果。
+- 发起召回即冻结 `frozen_at` 作为完整关系边界。边界之后登记的关系不改变本次召回快照，但若与本召回装配链相关，会自动补入隔离名单；与已解除整机的装配时段共存时，隔离重新生效。
+- 每台整机必须登记更换凭证编号才能解除隔离；待处理未清零时结案返回 409；结案后补录旧关系（`/lineage/recalls/{id}/late-relation`）会重开召回并重新核验。
+- 处于隔离中的整机上仍在装的部件资产号自动从新的分析任务中排除，并写入 `Job.params.excluded_assets` 留痕。
+
+对应实现：`backend/src/services/lineage.py`、`backend/src/routes/lineage.py`、`backend/src/models/lineage.py`、`frontend/src/pages/lineage.js`。
 
 ## 技术与本地开发
 Python 3.12 / FastAPI / SQLAlchemy / NumPy / SciPy / scikit-learn；PostgreSQL 16；Redis 7；Nginx；原生 HTML CSS JavaScript ES modules（用户指定）。后端所有校验、持久化和算法在服务端。无前端打包步骤。
 后端：安装 backend/requirements.txt，设置 DATABASE_URL、REDIS_URL、JWT_SECRET、ARTIFACT_DIR 后在 backend/ 执行 `python -m migrations.initial`、`python -m scripts.seed_demo`、`uvicorn src.main:app`，另开 `python -m src.worker`。前端使用带 /api 反向代理的 Nginx，直接打开 index.html 不支持 API。
+回归测试：`backend/` 下 `python -m pytest tests/test_lineage.py -q`（依赖见 `backend/requirements-dev.txt`）。
 
 ## 目录与工程约定
-backend/src/{models,schemas,services,routes,controllers,middlewares,constants,config,utils}；backend/scripts/seed_demo.py；backend/migrations/initial.py。
+backend/src/{models,schemas,services,routes,controllers,middlewares,constants,config,utils}；backend/scripts/seed_demo.py；backend/migrations/initial.py；backend/tests/。
 frontend/src/{api,stores,types,components/common,hooks,pages,router,utils,constants}。
-Role 枚举：admin/analyst/viewer；JobStatus：queued/running/completed/failed。后端 backend/src/constants/enums.py，前端 frontend/src/constants/enums.js；路由权限在 middlewares/auth.py；页面按相同角色控制操作入口。
+Role 枚举：admin/analyst/viewer；JobStatus：queued/running/completed/failed；PartKind：machine/assembly/component；RecallStatus：tracing/open/closed；IsolationStatus：isolated/released。后端 backend/src/constants/enums.py，前端 frontend/src/constants/enums.js；路由权限在 middlewares/auth.py；页面按相同角色控制操作入口。
 
 ## 环境变量与 Docker
 COMPOSE_PROJECT_NAME=fleet-weibull；FRONTEND_PORT=18216；BACKEND_PORT=19216；DB_PORT=17716；DB_PASSWORD、JWT_SECRET 见 .env.example；SEED_DEMO 默认 true。共享命名产物卷供后端下载与 worker 写入，数据库/Redis 各持久卷。

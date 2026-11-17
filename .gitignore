@@ -7,6 +7,9 @@ dist/
 artifacts/
 uploads/
 *.log
+*.db
+.pytest_cache/
+tests/__pycache__/
 
 # solo-2611：凭据、依赖与构建产物不进仓库
 .env.*

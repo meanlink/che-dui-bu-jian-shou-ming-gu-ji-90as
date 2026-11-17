@@ -12,7 +12,7 @@ def metadata():
         "workflow": "机务组每月导出更换与在役记录，只对已坏件求平均寿命，再用统一里程安排检修。",
         "pains": ["只看坏件会丢掉在役件的寿命信息", "不同压缩机型号被混在一个均值内", "检修里程未表达可靠度假设"],
         "upstream": "部件安装里程、失效更换里程与截止日仍在役里程", "downstream": "机务检修评审，人工结合安全规程安排检查。",
-        "entities": ["部件寿命样本", "可靠度估计", "机务简报计划"], "dataset_name": "鹭湾公交_压缩机寿命与在役截止.csv",
+        "entities": ["部件寿命样本", "可靠度估计", "机务简报计划", "装配谱系与召回隔离"], "dataset_name": "鹭湾公交_压缩机寿命与在役截止.csv",
         "columns": [{"key": "asset", "label": "部件资产号", "type": "string"}, {"key": "model", "label": "型号", "type": "string"}, {"key": "km", "label": "观测运行里程", "type": "number"}, {"key": "failed", "label": "已失效1/在役0", "type": "number"}],
         "parameters": [{"key": "model", "label": "部件型号", "type": "select", "default": "AC-8", "options": [{"value": "AC-8", "label": "AC-8 螺杆机"}, {"value": "AC-12", "label": "AC-12 改进型"}]}, {"key": "reliability", "label": "目标可靠度", "type": "number", "default": 0.9, "min": 0.6, "max": 0.99}],
         "workbench_title": "删失样本与检修可靠度", "action_label": "拟合寿命曲线", "unit": "公里", "accent": "oklch(51% 0.13 35)", "style": "fleet-chart",
@@ -43,10 +43,15 @@ def analyze(records, params):
         raise ValueError("目标可靠度必须是数值") from None
     if not math.isfinite(reliability) or not 0.6 <= reliability <= 0.99:
         raise ValueError("目标可靠度须介于0.6和0.99")
+    excluded = {str(a) for a in params.get("excluded_assets", [])}
     times, events = [], []
     assets = set()
+    skipped = 0
     for row in records:
         if str(row.get("model")) != model_name:
+            continue
+        if str(row.get("asset")) in excluded:
+            skipped += 1
             continue
         try:
             time = float(row["km"])
@@ -93,8 +98,9 @@ def analyze(records, params):
         warnings.append("目标可靠度里程超过最大观测里程，属于外推。")
     if shape < 0.11 or shape > 14.9:
         warnings.append("形状参数接近优化边界，当前二参数假设可能不适合数据。")
+    excluded_note = f"隔离整机上的{skipped}件样本未进入估计。" if skipped else ""
     return {
-        "summary": f"{model_name}的{len(times)}件样本含{failures}件失效、{censored}件右删失；目标可靠度{reliability:.0%}对应运行里程约{threshold:,.0f}公里。",
+        "summary": f"{model_name}的{len(times)}件样本含{failures}件失效、{censored}件右删失；目标可靠度{reliability:.0%}对应运行里程约{threshold:,.0f}公里。" + excluded_note,
         "metrics": [{"label": "形状参数β", "value": round(shape, 4)}, {"label": "尺度参数η", "value": round(scale, 1), "unit": "公里"}, {"label": "B10寿命", "value": round(b10, 1), "unit": "公里"}, {"label": "目标可靠度里程", "value": round(threshold, 1), "unit": "公里"}],
         "table": {"columns": [{"key": "reliability", "label": "可靠度R"}, {"key": "km", "label": "运行里程"}, {"key": "failed_pct", "label": "累计失效概率%"}, {"key": "target", "label": "用途"}], "rows": rows},
         "chart": {"type": "line", "labels": [str(round(float(value))) for value in chart_x], "series": [{"name": "仍正常运行概率%", "values": curve}]},
